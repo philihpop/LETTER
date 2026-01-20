@@ -6,21 +6,20 @@ from time import time
 import logging
 import wandb
 from torch.utils.data import DataLoader
+import os
 
 from datasets import EmbDataset
 from models.rqvae import RQVAE
-from trainer import  Trainer
-import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+from trainer import Trainer
 
 def parse_args():
     parser = argparse.ArgumentParser(description="RQ-VAE")
 
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
-    parser.add_argument('--epochs', type=int, default=20000, help='number of epochs')
-    parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
-    parser.add_argument('--num_workers', type=int, default=4, )
-    parser.add_argument('--eval_step', type=int, default=2000, help='eval step')
+    parser.add_argument('--epochs', type=int, default=10000, help='number of epochs')
+    parser.add_argument('--batch_size', type=int, default=2048, help='batch size')
+    parser.add_argument('--num_workers', type=int, default=16, )
+    parser.add_argument('--eval_step', type=int, default=500, help='eval step')
     parser.add_argument('--learner', type=str, default="AdamW", help='optimizer')
     parser.add_argument("--data_path", type=str, default="../data", help="Input data path.")
 
@@ -33,16 +32,16 @@ def parse_args():
     parser.add_argument('--sk_epsilons', type=float, nargs='+', default=[0.0, 0.0, 0.0, 0.003], help="sinkhorn epsilons")
     parser.add_argument("--sk_iters", type=int, default=50, help="max sinkhorn iters")
 
-    parser.add_argument("--device", type=str, default="cuda:4", help="gpu or cpu")
+    parser.add_argument("--device", type=str, default="cuda:0", help="gpu or cpu")
 
     parser.add_argument('--num_emb_list', type=int, nargs='+', default=[256,256,256,256], help='emb num of every vq')
     parser.add_argument('--e_dim', type=int, default=32, help='vq codebook embedding size')
     parser.add_argument('--quant_loss_weight', type=float, default=1.0, help='vq quantion loss weight')
-    parser.add_argument('--alpha', type=float, default=0.1, help='cf loss weight')
-    parser.add_argument('--beta', type=float, default=0.1, help='diversity loss weight')
+    parser.add_argument('--alpha', type=float, default=0.0, help='cf loss weight (0 to disable)')
+    parser.add_argument('--beta', type=float, default=0.0, help='diversity loss weight (0 to disable)')
     parser.add_argument('--n_clusters', type=int, default=10, help='n_clusters')
     parser.add_argument('--sample_strategy', type=str, default="all", help='sample_strategy')
-    parser.add_argument('--cf_emb', type=str, default="./RQ-VAE/ckpt/Instruments-32d-sasrec.pt", help='cf emb')
+    parser.add_argument('--cf_emb', type=str, default=None, help='cf embedding file path (optional)')
    
     parser.add_argument('--layers', type=int, nargs='+', default=[2048,1024,512,256,128,64], help='hidden sizes of every layer')
 
@@ -63,41 +62,85 @@ if __name__ == '__main__':
 
     args = parse_args()
 
-    print(args)
+    print("="*80)
+    print("RQ-VAE Training Configuration")
+    print("="*80)
+    print(f"Alpha (CF loss): {args.alpha}")
+    print(f"Beta (Diversity loss): {args.beta}")
+    print(f"Epochs: {args.epochs}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Device: {args.device}")
+    print(f"Output dir: {args.ckpt_dir}")
+    print("="*80)
+
     logging.basicConfig(level=logging.DEBUG)
-    cf_emb = torch.load(args.cf_emb).squeeze().detach().numpy()
 
     """build dataset"""
     data = EmbDataset(args.data_path)
-    model = RQVAE(in_dim=data.dim,
-                  num_emb_list=args.num_emb_list,
-                  e_dim=args.e_dim,
-                  layers=args.layers,
-                  dropout_prob=args.dropout_prob,
-                  bn=args.bn,
-                  loss_type=args.loss_type,
-                  quant_loss_weight=args.quant_loss_weight,
-                  kmeans_init=args.kmeans_init,
-                  kmeans_iters=args.kmeans_iters,
-                  sk_epsilons=args.sk_epsilons,
-                  sk_iters=args.sk_iters,
-                  beta = args.beta,
-                  alpha = args.alpha,
-                  n_clusters= args.n_clusters,
-                  sample_strategy =args.sample_strategy,
-                  cf_embedding = cf_emb
-                  )
-    print(model)
-    data_loader = DataLoader(data,num_workers=args.num_workers,
-                             batch_size=args.batch_size, shuffle=True,
-                             pin_memory=True)
+    print(f"Dataset loaded: {len(data)} items, embedding dim: {data.dim}")
 
-    trainer = Trainer(args,model)
+    # Load CF embeddings if provided and alpha > 0
+    if args.cf_emb is not None and args.alpha > 0:
+        if os.path.exists(args.cf_emb):
+            print(f"Loading CF embeddings from: {args.cf_emb}")
+            cf_emb = torch.load(args.cf_emb).squeeze().detach().numpy()
+            cf_emb = cf_emb.astype(np.float32)
+            print(f"CF embeddings shape: {cf_emb.shape}")
+        else:
+            print(f"WARNING: CF embedding file not found: {args.cf_emb}")
+            print("Creating dummy CF embeddings (zeros)")
+            cf_emb = np.zeros((len(data), 32))
+    else:
+        if args.alpha > 0:
+            print("WARNING: alpha > 0 but no CF embeddings provided. Using dummy embeddings.")
+        else:
+            print("CF loss disabled (alpha=0), using dummy embeddings")
+        cf_emb = np.zeros((len(data), 32))
+
+    # Build model
+    model = RQVAE(
+        in_dim=data.dim,
+        num_emb_list=args.num_emb_list,
+        e_dim=args.e_dim,
+        layers=args.layers,
+        dropout_prob=args.dropout_prob,
+        bn=args.bn,
+        loss_type=args.loss_type,
+        quant_loss_weight=args.quant_loss_weight,
+        kmeans_init=args.kmeans_init,
+        kmeans_iters=args.kmeans_iters,
+        sk_epsilons=args.sk_epsilons,
+        sk_iters=args.sk_iters,
+        beta=args.beta,
+        alpha=args.alpha,
+        n_clusters=args.n_clusters,
+        sample_strategy=args.sample_strategy,
+        cf_embedding=cf_emb
+    )
+    
+    print("\nModel architecture:")
+    print(model)
+    print(f"\nTotal parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+    # Create data loader
+    data_loader = DataLoader(
+        data,
+        num_workers=args.num_workers,
+        batch_size=args.batch_size,
+        shuffle=True,
+        pin_memory=True,
+        persistent_workers=True if args.num_workers > 0 else False
+    )
+
+    print(f"\nData loader created: {len(data_loader)} batches")
+
+    # Train
+    trainer = Trainer(args, model)
     best_loss, best_collision_rate = trainer.fit(data_loader)
 
-    print("Best Loss",best_loss)
-    print("Best Collision Rate", best_collision_rate)
-
-
-
-
+    print("\n" + "="*80)
+    print("Training completed!")
+    print("="*80)
+    print(f"Best Loss: {best_loss:.6f}")
+    print(f"Best Collision Rate: {best_collision_rate:.6f}")
+    print("="*80)

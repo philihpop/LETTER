@@ -842,3 +842,250 @@ class SeqRecTestDataset(BaseDataset):
         input, target = self._get_text_data(d, self.prompt)
 
         return dict(input_ids=input, labels=target)
+
+class SeqRecDatasetGlobalSplit(BaseDataset):
+    """
+    Sequential Recommendation Dataset with Global Time Splitting.
+    Splits data based on global timestamps rather than per-user leave-one-out.
+    """
+    
+    def __init__(self, args, mode="train", prompt_sample_num=1, prompt_id=0, sample_num=-1):
+        super().__init__(args)
+        
+        self.mode = mode
+        self.prompt_sample_num = prompt_sample_num
+        self.prompt_id = prompt_id
+        self.sample_num = sample_num
+        self.prompts = all_prompt["seqrec"]
+        
+        # Load data
+        self._load_data()
+        self._remap_items()
+        
+        # Global time split
+        self._create_global_time_splits()
+        
+        # Process data based on mode
+        if self.mode == 'train':
+            self.inter_data = self._process_train_data_global()
+        elif self.mode == 'valid':
+            self.sample_valid = args.sample_valid
+            self.valid_prompt_id = args.valid_prompt_id
+            self.inter_data = self._process_valid_data_global()
+            self._construct_valid_text()
+        elif self.mode == 'test':
+            self.inter_data = self._process_test_data_global()
+        else:
+            raise NotImplementedError
+    
+    def _load_data(self):
+        with open(os.path.join(self.data_path, self.dataset + ".inter.json"), 'r') as f:
+            self.inters = json.load(f)
+        with open(os.path.join(self.data_path, self.dataset + self.index_file), 'r') as f:
+            self.indices = json.load(f)
+    
+    def _remap_items(self):
+        self.remapped_inters = dict()
+        for uid, items in self.inters.items():
+            new_items = ["".join(self.indices[str(i)]) for i in items]
+            self.remapped_inters[uid] = new_items
+    
+    def _create_global_time_splits(self):
+        """
+        Create global time-based splits (80% train, 10% valid, 10% test).
+        For each user, determine which interactions belong to which split.
+        """
+        print("Creating global time splits...")
+        
+        # Collect all interactions with timestamps
+        # Since we already have chronologically ordered sequences, we use positions as proxy
+        all_interactions = []
+        for uid, items in self.remapped_inters.items():
+            for idx, item in enumerate(items):
+                # Use (uid, position) as timestamp proxy since items are already ordered
+                all_interactions.append((uid, idx, item))
+        
+        # Calculate split points
+        total_interactions = len(all_interactions)
+        train_end = int(total_interactions * 0.8)
+        valid_end = int(total_interactions * 0.9)
+        
+        print(f"Total interactions: {total_interactions}")
+        print(f"Train: 0-{train_end} ({train_end} interactions)")
+        print(f"Valid: {train_end}-{valid_end} ({valid_end - train_end} interactions)")
+        print(f"Test: {valid_end}-{total_interactions} ({total_interactions - valid_end} interactions)")
+        
+        # Assign interactions to splits
+        self.train_inters = defaultdict(list)
+        self.valid_inters = defaultdict(list)
+        self.test_inters = defaultdict(list)
+        
+        for global_idx, (uid, local_idx, item) in enumerate(all_interactions):
+            if global_idx < train_end:
+                self.train_inters[uid].append(item)
+            elif global_idx < valid_end:
+                self.valid_inters[uid].append(item)
+            else:
+                self.test_inters[uid].append(item)
+        
+        print(f"Train users: {len(self.train_inters)}")
+        print(f"Valid users with targets: {len([u for u in self.valid_inters if self.valid_inters[u]])}")
+        print(f"Test users with targets: {len([u for u in self.test_inters if self.test_inters[u]])}")
+    
+    def _process_train_data_global(self):
+        """Process training data from global time split."""
+        inter_data = []
+        
+        for uid in self.train_inters:
+            items = self.train_inters[uid]
+            if len(items) < 2:  # Need at least one history item
+                continue
+            
+            for i in range(1, len(items)):
+                one_data = dict()
+                one_data["item"] = items[i]
+                history = items[:i]
+                
+                if self.max_his_len > 0:
+                    history = history[-self.max_his_len:]
+                if self.add_prefix:
+                    history = [str(k+1) + ". " + item_idx for k, item_idx in enumerate(history)]
+                
+                one_data["inters"] = self.his_sep.join(history)
+                inter_data.append(one_data)
+        
+        return inter_data
+    
+    def _process_valid_data_global(self):
+        """Process validation data from global time split."""
+        inter_data = []
+        
+        for uid in self.valid_inters:
+            target_items = self.valid_inters[uid]
+            if not target_items:
+                continue
+            
+            # Get history up to validation point
+            history = self.train_inters.get(uid, [])
+            
+            for target_item in target_items:
+                if len(history) == 0:  # Need at least some history
+                    continue
+                
+                one_data = dict()
+                one_data["item"] = target_item
+                
+                hist = history.copy()
+                if self.max_his_len > 0:
+                    hist = hist[-self.max_his_len:]
+                if self.add_prefix:
+                    hist = [str(k+1) + ". " + item_idx for k, item_idx in enumerate(hist)]
+                
+                one_data["inters"] = self.his_sep.join(hist)
+                inter_data.append(one_data)
+                
+                # Add current item to history for next validation item
+                history.append(target_item)
+        
+        return inter_data
+    
+    def _process_test_data_global(self):
+        """Process test data from global time split."""
+        inter_data = []
+        
+        for uid in self.test_inters:
+            target_items = self.test_inters[uid]
+            if not target_items:
+                continue
+            
+            # Get history up to test point (train + valid)
+            history = self.train_inters.get(uid, []) + self.valid_inters.get(uid, [])
+            
+            for target_item in target_items:
+                if len(history) == 0:
+                    continue
+                
+                one_data = dict()
+                one_data["item"] = target_item
+                
+                hist = history.copy()
+                if self.max_his_len > 0:
+                    hist = hist[-self.max_his_len:]
+                if self.add_prefix:
+                    hist = [str(k+1) + ". " + item_idx for k, item_idx in enumerate(hist)]
+                
+                one_data["inters"] = self.his_sep.join(hist)
+                inter_data.append(one_data)
+                
+                # Add current item to history for next test item
+                history.append(target_item)
+        
+        if self.sample_num > 0:
+            all_inter_idx = range(len(inter_data))
+            sample_idx = np.random.choice(all_inter_idx, min(self.sample_num, len(inter_data)), replace=False)
+            inter_data = np.array(inter_data)[sample_idx].tolist()
+        
+        return inter_data
+    
+    def set_prompt(self, prompt_id):
+        self.prompt_id = prompt_id
+    
+    def __len__(self):
+        if self.mode == 'train':
+            return len(self.inter_data) * self.prompt_sample_num
+        elif self.mode == 'valid':
+            return len(self.valid_text_data)
+        elif self.mode == 'test':
+            return len(self.inter_data)
+        else:
+            raise NotImplementedError
+    
+    def _construct_valid_text(self):
+        self.valid_text_data = []
+        if self.sample_valid:
+            all_prompt_ids = range(len(self.prompts))
+            for i in range(len(self.inter_data)):
+                d = self.inter_data[i]
+                prompt_ids = np.random.choice(all_prompt_ids, self.prompt_sample_num, replace=False)
+                for prompt_id in prompt_ids:
+                    prompt = self.prompts[prompt_id]
+                    input, output = self._get_text_data(d, prompt)
+                    self.valid_text_data.append({"input_ids": input, "labels": output})
+        else:
+            self.prompt_sample_num = 1
+            prompt = self.prompts[self.valid_prompt_id]
+            for i in range(len(self.inter_data)):
+                d = self.inter_data[i]
+                input, output = self._get_text_data(d, prompt)
+                self.valid_text_data.append({"input_ids": input, "labels": output})
+    
+    def _get_text_data(self, data, prompt):
+        from prompt import sft_prompt
+        
+        instruction = prompt["instruction"].format(**data)
+        response = prompt["response"].format(**data)
+        
+        input = sft_prompt.format(instruction=instruction, response="")
+        output = sft_prompt.format(instruction=instruction, response=response)
+        
+        if self.mode == 'test':
+            return input, response
+        
+        return input, output
+    
+    def __getitem__(self, index):
+        if self.mode == 'valid':
+            return self.valid_text_data[index]
+        
+        idx = index // self.prompt_sample_num
+        d = self.inter_data[idx]
+        
+        if self.mode == 'train':
+            prompt_id = random.randint(0, len(self.prompts) - 1)
+        elif self.mode == 'test':
+            prompt_id = self.prompt_id
+        
+        prompt = self.prompts[prompt_id]
+        input, output = self._get_text_data(d, prompt)
+        
+        return dict(input_ids=input, labels=output)

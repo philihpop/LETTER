@@ -7,7 +7,8 @@ import datetime
 import numpy as np
 import torch
 from torch.utils.data import ConcatDataset
-from data import SeqRecDataset, ItemFeatDataset, ItemSearchDataset, FusionSeqRecDataset, SeqRecTestDataset, PreferenceObtainDataset
+from data import ItemFeatDataset, ItemSearchDataset, FusionSeqRecDataset, SeqRecTestDataset, PreferenceObtainDataset
+from data import SeqRecDatasetGlobalSplit as SeqRecDataset
 
 
 def parse_global_args(parser):
@@ -113,7 +114,9 @@ def parse_test_args(parser):
     parser.add_argument("--metrics", type=str, default="hit@1,hit@5,hit@10,ndcg@5,ndcg@10",
                         help="test metrics, separate by comma")
     parser.add_argument("--test_task", type=str, default="SeqRec")
-
+    parser.add_argument("--metrics", type=str, 
+                       default="hit@1,hit@5,hit@10,hit@20,hit@50,ndcg@5,ndcg@10,ndcg@20,ndcg@50,recall@20,recall@50",
+                       help="test metrics, separate by comma")
 
     return parser
 

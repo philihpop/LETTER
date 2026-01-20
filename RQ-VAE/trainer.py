@@ -97,26 +97,59 @@ class Trainer(object):
         t_labels = torch.from_numpy(clf.labels_).tolist()
 
         return t_centers, t_labels
-    
+
     def vq_init(self):
         self.model.eval()
         original_data = EmbDataset(self.args.data_path)
-        init_loader = DataLoader(original_data,num_workers=self.args.num_workers,
-                             batch_size=len(original_data), shuffle=True,
-                             pin_memory=True)
-        print(len(init_loader))
+        
+        # ONLY USE A SUBSET FOR INITIALIZATION (much faster!)
+        subset_size = min(10000, len(original_data))  # Use max 10K samples
+        indices = np.random.choice(len(original_data), subset_size, replace=False)
+        
+        # Create a subset dataset
+        subset_data = torch.utils.data.Subset(original_data, indices)
+        
+        init_loader = DataLoader(
+            subset_data,
+            num_workers=self.args.num_workers,
+            batch_size=len(subset_data),  # Load all at once
+            shuffle=False,
+            pin_memory=True
+        )
+        
+        print(f"Initializing VQ with {len(subset_data)} samples (subset of {len(original_data)})")
+        
         iter_data = tqdm(
-                    init_loader,
-                    total=len(init_loader),
-                    ncols=100,
-                    desc=set_color(f"Initialization of vq","pink"),
-                    )
+            init_loader,
+            total=len(init_loader),
+            ncols=100,
+            desc=set_color(f"Initialization of vq","pink"),
+        )
+        
         # Train
         for batch_idx, data in enumerate(iter_data):
             data, emb_idx = data[0], data[1]
             data = data.to(self.device)
-
             self.model.vq_initialization(data)    
+    # def vq_init(self):
+    #     self.model.eval()
+    #     original_data = EmbDataset(self.args.data_path)
+    #     init_loader = DataLoader(original_data,num_workers=self.args.num_workers,
+    #                          batch_size=len(original_data), shuffle=True,
+    #                          pin_memory=True)
+    #     print(len(init_loader))
+    #     iter_data = tqdm(
+    #                 init_loader,
+    #                 total=len(init_loader),
+    #                 ncols=100,
+    #                 desc=set_color(f"Initialization of vq","pink"),
+    #                 )
+    #     # Train
+    #     for batch_idx, data in enumerate(iter_data):
+    #         data, emb_idx = data[0], data[1]
+    #         data = data.to(self.device)
+
+    #         self.model.vq_initialization(data)    
 
     def _train_epoch(self, train_data, epoch_idx):
 
@@ -257,9 +290,9 @@ class Trainer(object):
                 else:
                     cur_eval_step += 1
 
-                # if cur_eval_step >= 10:
-                #     print("Finish!")
-                #     break
+                if cur_eval_step >= 10:
+                    print("Early stopping triggered!")
+                    break
 
                 valid_end_time = time()
                 valid_score_output = (

@@ -7,7 +7,7 @@ import datetime
 import numpy as np
 import torch
 from torch.utils.data import ConcatDataset
-from data import SeqRecDataset
+from data import SeqRecDatasetGlobalSplit as SeqRecDataset
 
 def parse_global_args(parser):
 

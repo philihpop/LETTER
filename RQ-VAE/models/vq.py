@@ -51,20 +51,51 @@ class VectorQuantizer(nn.Module):
         self.embedding.weight.data.copy_(centers)
         self.initted = True
     
+    # def constrained_km(self, data, n_clusters=10):
+    #     from k_means_constrained import KMeansConstrained 
+    #     x = data.cpu().detach().numpy()
+
+    #     size_min = min(len(data) // (n_clusters * 2), 50) # 50 for the very first time, 10 the latter
+
+    #     clf = KMeansConstrained(n_clusters=n_clusters, size_min=size_min, size_max=size_min * 4, max_iter=10, n_init=10,
+    #                             n_jobs=10, verbose=False) # 'size_min * 4' for the very first time, 'n_clusters * 4' for the latter
+    #     clf.fit(x)
+    #     t_centers = torch.from_numpy(clf.cluster_centers_)
+    #     t_labels = torch.from_numpy(clf.labels_).tolist()
+    #     value_counts = {}
+    #     return t_centers, t_labels
     def constrained_km(self, data, n_clusters=10):
         from k_means_constrained import KMeansConstrained 
         x = data.cpu().detach().numpy()
-
-        size_min = min(len(data) // (n_clusters * 2), 50) # 50 for the very first time, 10 the latter
-
-        clf = KMeansConstrained(n_clusters=n_clusters, size_min=size_min, size_max=size_min * 4, max_iter=10, n_init=10,
-                                n_jobs=10, verbose=False) # 'size_min * 4' for the very first time, 'n_clusters * 4' for the latter
+        
+        n_samples = len(data)
+        
+        # Adjust size constraints based on dataset size
+        # The original code uses fixed values which may not work for all datasets
+        size_min = min(n_samples // (n_clusters * 2), 50)
+        size_max = max(size_min * 4, n_clusters * 6)
+        
+        # Ensure constraints are feasible: size_min * n_clusters <= n_samples <= size_max * n_clusters
+        if size_max * n_clusters < n_samples:
+            size_max = int(np.ceil(n_samples / n_clusters)) + 1
+        
+        if size_min * n_clusters > n_samples:
+            size_min = max(1, int(np.floor(n_samples / n_clusters)))
+        
+        clf = KMeansConstrained(
+            n_clusters=n_clusters,
+            size_min=size_min,
+            size_max=size_max,
+            max_iter=10,
+            n_init=10,
+            n_jobs=10,
+            verbose=False
+        )
         clf.fit(x)
         t_centers = torch.from_numpy(clf.cluster_centers_)
         t_labels = torch.from_numpy(clf.labels_).tolist()
-        value_counts = {}
+        
         return t_centers, t_labels
-
 
     def diversity_loss(self, x_q, indices, indices_cluster, indices_list):
         emb = self.embedding.weight

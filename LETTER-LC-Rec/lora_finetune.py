@@ -13,7 +13,7 @@ from fastchat.train.llama2_flash_attn_monkey_patch import (
 replace_llama_attn_with_flash_attn()
 
 import transformers
-
+from transformers import EarlyStoppingCallback
 
 from peft import (
     TaskType,
@@ -134,13 +134,16 @@ def train(args):
             eval_steps=args.save_and_eval_steps,
             save_steps=args.save_and_eval_steps,
             output_dir=args.output_dir,
-            save_total_limit=1,
+            save_total_limit=3,
             load_best_model_at_end=True,
+            metric_for_best_model="eval_loss", 
+            greater_is_better=False,
             deepspeed=args.deepspeed,
             ddp_find_unused_parameters=False if ddp else None,
             # report_to=None,
             eval_delay=1 if args.save_and_eval_strategy=="epoch" else 2000,
         ),
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=20)],
         tokenizer=tokenizer,
         data_collator=collator,
     )

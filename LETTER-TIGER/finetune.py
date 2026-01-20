@@ -14,6 +14,7 @@ from modeling_letter import LETTER
 # import wandb
 from utils import *
 from collator import Collator
+from transformers import EarlyStoppingCallback
 
 def train(args):
     print(torch.cuda.is_available())
@@ -95,6 +96,8 @@ def train(args):
             output_dir=args.output_dir,
             save_total_limit=2,
             load_best_model_at_end=True,
+            metric_for_best_model="eval_loss", 
+            greater_is_better=False,
             # deepspeed=args.deepspeed,
             ddp_find_unused_parameters=False if ddp else None,
             # report_to=['wandb'],

@@ -58,7 +58,7 @@ args_setting = parse_args()
 dataset = args_setting.dataset
 ckpt_path = args_setting.root_path + f'alpha{args_setting.alpha}-beta{args_setting.beta}/'+args_setting.checkpoint
 
-output_dir = f"./data/{dataset}/"
+output_dir = f"../data/{dataset}/"
 output_file = f"{dataset}.index.epoch{args_setting.epoch}.alpha{args_setting.alpha}-beta{args_setting.beta}.json"
 output_file = os.path.join(output_dir,output_file)
 device = torch.device("cuda:0")

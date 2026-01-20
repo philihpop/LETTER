@@ -1,1 +1,14 @@
 Microlens-50k_covers/
+*.pth
+*.err
+*.out
+*.pyc
+data/
+*.slurm
+*.sh
+*.json
+*.pyc
+*.model
+*.bin
+*.pt
+*.txt
