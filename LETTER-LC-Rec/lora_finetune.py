@@ -6,11 +6,11 @@ from typing import List
 import torch
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 from modeling_letter import LETTER
-from fastchat.train.llama2_flash_attn_monkey_patch import (
-    replace_llama_attn_with_flash_attn,
-)
+# from fastchat.train.llama2_flash_attn_monkey_patch import (
+#     replace_llama_attn_with_flash_attn,
+# )
 
-replace_llama_attn_with_flash_attn()
+# replace_llama_attn_with_flash_attn()
 
 import transformers
 from transformers import EarlyStoppingCallback
@@ -123,7 +123,8 @@ def train(args):
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             lr_scheduler_type=args.lr_scheduler_type,
-            report_to=['wandb'],
+            report_to=None,
+            # report_to=['wandb'],
             fp16=args.fp16,
             bf16=args.bf16,
             logging_steps=args.logging_step,

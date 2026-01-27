@@ -37,7 +37,7 @@ class BaseDataset(Dataset):
 
     def _load_data(self):
 
-        with open(os.path.join(self.data_path, self.dataset + self.index_file), 'r') as f:
+        with open(os.path.join(self.index_file), 'r') as f:
             self.indices = json.load(f)
 
     def get_new_tokens(self):
@@ -137,7 +137,7 @@ class SeqRecDataset(BaseDataset):
 
         with open(os.path.join(self.data_path, self.dataset + ".inter.json"), 'r') as f:
             self.inters = json.load(f)
-        with open(os.path.join(self.data_path, self.dataset + self.index_file), 'r') as f:
+        with open(os.path.join(self.index_file), 'r') as f:
             self.indices = json.load(f)
 
     def _remap_items(self):
@@ -289,7 +289,7 @@ class SeqRecDatasetGlobalSplit(BaseDataset):
     def _load_data(self):
         with open(os.path.join(self.data_path, self.dataset + ".inter.json"), 'r') as f:
             self.inters = json.load(f)
-        with open(os.path.join(self.data_path, self.dataset + self.index_file), 'r') as f:
+        with open(os.path.join(self.index_file), 'r') as f:
             self.indices = json.load(f)
     
     def _remap_items(self):
@@ -301,55 +301,50 @@ class SeqRecDatasetGlobalSplit(BaseDataset):
     def _create_global_time_splits(self):
         """
         Create global time-based splits (80% train, 10% valid, 10% test).
-        For each user, determine which interactions belong to which split.
+        For each user, split their chronological interactions proportionally.
+        This simulates temporal progression while handling user-sorted data.
         """
         print("Creating global time splits...")
-        
-        # Collect all interactions with timestamps
-        # Since we already have chronologically ordered sequences, we use positions as proxy
-        all_interactions = []
-        for uid, items in self.remapped_inters.items():
-            for idx, item in enumerate(items):
-                # Use (uid, position) as timestamp proxy since items are already ordered
-                all_interactions.append((uid, idx, item))
-        
-        # Calculate split points
-        total_interactions = len(all_interactions)
-        train_end = int(total_interactions * 0.8)
-        valid_end = int(total_interactions * 0.9)
-        
-        print(f"Total interactions: {total_interactions}")
-        print(f"Train: 0-{train_end} ({train_end} interactions)")
-        print(f"Valid: {train_end}-{valid_end} ({valid_end - train_end} interactions)")
-        print(f"Test: {valid_end}-{total_interactions} ({total_interactions - valid_end} interactions)")
-        
-        # Assign interactions to splits
+
+        # Apply 80/10/10 split per user
         self.train_inters = defaultdict(list)
         self.valid_inters = defaultdict(list)
         self.test_inters = defaultdict(list)
-        
-        for global_idx, (uid, local_idx, item) in enumerate(all_interactions):
-            if global_idx < train_end:
-                self.train_inters[uid].append(item)
-            elif global_idx < valid_end:
-                self.valid_inters[uid].append(item)
-            else:
-                self.test_inters[uid].append(item)
-        
+
+        total_train = 0
+        total_valid = 0
+        total_test = 0
+
+        for uid, items in self.remapped_inters.items():
+            n_items = len(items)
+
+            # Calculate split points for this user
+            train_end = max(1, int(n_items * 0.8))  # At least 1 for train
+            valid_end = max(train_end + 1, int(n_items * 0.9))  # At least 1 for valid
+
+            # Split this user's interactions
+            self.train_inters[uid] = items[:train_end]
+            self.valid_inters[uid] = items[train_end:valid_end]
+            self.test_inters[uid] = items[valid_end:]
+
+            total_train += len(self.train_inters[uid])
+            total_valid += len(self.valid_inters[uid])
+            total_test += len(self.test_inters[uid])
+
+        print(f"Total interactions: {total_train + total_valid + total_test}")
+        print(f"Train: {total_train} interactions ({total_train/(total_train+total_valid+total_test)*100:.1f}%)")
+        print(f"Valid: {total_valid} interactions ({total_valid/(total_train+total_valid+total_test)*100:.1f}%)")
+        print(f"Test: {total_test} interactions ({total_test/(total_train+total_valid+total_test)*100:.1f}%)")
+
         print(f"Train users: {len(self.train_inters)}")
         print(f"Valid users with targets: {len([u for u in self.valid_inters if self.valid_inters[u]])}")
         print(f"Test users with targets: {len([u for u in self.test_inters if self.test_inters[u]])}")
-        
+
         # Check overlap
         test_users = set(self.test_inters.keys())
         train_users = set(self.train_inters.keys())
         users_with_history = test_users & train_users
         print(f"Test users who also appear in train: {len(users_with_history)} / {len(test_users)}")
-        
-        if len(users_with_history) == 0:
-            print("WARNING: No test users have training history! This will cause issues.")
-            print("This likely means your data is sorted by user, not by time.")
-            print("Consider using SeqRecDataset with leave-one-out split instead.")
     
     def _process_train_data_global(self):
         """Process training data from global time split."""
